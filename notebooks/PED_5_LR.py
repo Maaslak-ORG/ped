@@ -5,7 +5,7 @@
 #       extension: .py
 #       format_name: light
 #       format_version: '1.5'
-#       jupytext_version: 1.4.2
+#       jupytext_version: 1.5.0
 #   kernelspec:
 #     display_name: ped-venv
 #     language: python
@@ -108,6 +108,10 @@ new_df.head(5)
 train = pd.read_csv(os.path.join(PATH, "aggregated_train_no_embeddings.csv"))
 test = pd.read_csv(os.path.join(PATH, "aggregated_test_no_embeddings.csv"))
 
+def count_newlines(text):
+    text = text.replace('\\n', '\n')
+    return text.count('\n')
+
 new_df["description_length_newlines"] = new_df["description"].apply(count_newlines)
 new_data = new_df.loc[:, ["video_id", "description_length_newlines"]].groupby("video_id").agg(
     description_length_newlines=("description_length_newlines", "median")
@@ -149,6 +153,7 @@ for feature in any_best:
         continue
     else:
         SELECT_FEATURES.append(feature)
+print(len(SELECT_FEATURES))
 # -
 
 train.loc[:, SELECT_FEATURES].describe()
@@ -176,8 +181,8 @@ from sklearn.linear_model import LogisticRegressionCV
 
 from sklearn import preprocessing
 min_max_scaler = preprocessing.MinMaxScaler()
-X_train_minmax = min_max_scaler.fit_transform(X_train)
-X_test_minmax = min_max_scaler.fit_transform(X_test)
+X_train_minmax = X_train #min_max_scaler.fit_transform(X_train)
+X_test_minmax = X_test #min_max_scaler.fit_transform(X_test)
 
 from sklearn.model_selection import GridSearchCV
 from sklearn.linear_model import LogisticRegression
@@ -188,7 +193,7 @@ grid = {
     "class_weight": ["balanced", None]
 }
 logreg = LogisticRegression(random_state=20201506, max_iter=2000)
-logreg_cv = GridSearchCV(logreg, grid, cv=5, verbose=3, scoring='f1_micro')
+logreg_cv = GridSearchCV(logreg, grid, cv=5, verbose=3, scoring='accuracy')
 logreg_cv.fit(X_train_minmax, y_train)
 # -
 
@@ -196,7 +201,7 @@ logreg_cv.fit(X_train_minmax, y_train)
 
 # +
 print("tuned hyperparameters : (best parameters) ", logreg_cv.best_params_)
-print("f1-score (train dataset):", logreg_cv.best_score_)
+print("accuracy (train dataset):", logreg_cv.best_score_)
 
 clf = logreg_cv.best_estimator_
 clf
@@ -295,7 +300,61 @@ shap.force_plot(
     feature_names=SELECT_FEATURES
 )
 
+shap.summary_plot(shap_values, X_test_minmax, feature_names=SELECT_FEATURES)
+
 shap.summary_plot(shap_values, X_test_minmax, feature_names=SELECT_FEATURES, plot_type="bar")
+
+# +
+SAMPLE_SIZE = 300
+
+sample_idxs = np.random.permutation(range(X_test_minmax.shape[0]))[:SAMPLE_SIZE]
+shap_values_test = explainer.shap_values(X_test_minmax[sample_idxs])
+shap.force_plot(explainer.expected_value, shap_values_test, X_test_minmax[sample_idxs], feature_names=SELECT_FEATURES)
+
+# +
+import csv
+
+categories = {}
+with open(os.path.join('..', 'data', 'categories.csv')) as csv_file:
+    csv_reader = csv.reader(csv_file, delimiter=';')
+    line_count = 0
+    for row in csv_reader:
+        if line_count == 0:
+            line_count += 1
+            continue
+        else:
+            categories[int(row[0])] = row[1]
+        line_count += 1
+    print(f'Processed {line_count} lines.')
+
+# +
+y_train_pred = clf.predict(X_train_minmax)
+
+for category in set([*train["category_id"].values, *test["category_id"].values]):
+    if category == -1:
+        continue
+        
+    shap_values = explainer.shap_values(X_train_minmax)
+    mask = (train.category_id == category).values
+    
+    shap_values_category = shap_values[mask]
+    X_train_category = X_train_minmax[mask]
+    
+    y_train_pred_category = y_train_pred[mask]
+    y_train_category = np.asarray(y_train)[mask]
+    
+    print(f"Category {categories[int(category)] if category in categories else 'Unknown'}\n"
+        f"Number of samples {len(X_train_category)}\nAccuracy at those samples {accuracy_score(y_train_category, y_train_pred_category)*100.0:.2f}")
+    
+    display(shap.summary_plot(shap_values_category, X_train_category,feature_names=SELECT_FEATURES))
+    
+    SAMPLE_SIZE = 20
+    if len(X_train_category) > SAMPLE_SIZE:
+        sample_idxs = np.random.permutation(range(X_train_category.shape[0]))[:SAMPLE_SIZE]
+        X_train_category = X_train_category[sample_idxs]
+        shap_values_category = shap_values_category[sample_idxs]
+    
+    display(shap.force_plot(explainer.expected_value, shap_values_category, X_train_category, feature_names=SELECT_FEATURES))
 
 # +
 import seaborn as sns
