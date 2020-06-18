@@ -21,3 +21,6 @@ nlopt
 google-api-python-client
 google-auth-oauthlib 
 google-auth-httplib2
+shap
+xgboost==1.0.0
+bidict
